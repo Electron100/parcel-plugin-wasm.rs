@@ -169,14 +169,55 @@ class WASMbindgenAsset extends Asset {
     const wasm_loader = js_content + '\n' +
       exported_classes.map(c => `__exports.${c} = ${c};`).join("\n") +`
       function init(wasm_path) {
-          const fetchPromise = fetch(wasm_path);
+          readBinaryXHR=function(url) {
+							console.log("url is " + url)
+							return new Promise(function (resolve, reject) {
+									var xhr = new XMLHttpRequest;
+									xhr.open("GET", url, true);
+									xhr.responseType = "arraybuffer";
+									   xhr.onload = function () {
+												 if (this.status >= 200 && this.status < 300) {
+														 resolve(new Uint8Array(xhr.response));
+												 } else {
+														 reject({
+																 status: this.status,
+																 statusText: xhr.statusText
+														 });
+												 }
+										 };
+									xhr.onerror = function () {
+											reject({
+													status: this.status,
+													statusText: xhr.statusText
+											});
+									};
+									xhr.send(null);
+							})
+          }
+          wasmImport = { './badger_webclient': __exports };
+          instantiateViaArrayBuffer = function() {
+             return fetch(wasm_path)
+                  .then(response => response.arrayBuffer())
+                  .then(buffer => WebAssembly.instantiate(buffer, wasmImport))
+                  .catch(() => instantiateViaArrayBufferXHR())
+          }
+          instantiateViaArrayBufferXHR = function() {
+              // This is necessary when loading from file://, as fetch doesn't support
+              // the file protocol.
+              return readBinaryXHR(wasm_path)
+									.then((buffer) => WebAssembly.instantiate(buffer, wasmImport))
+          }
           let resultPromise;
           if (typeof WebAssembly.instantiateStreaming === 'function') {
-              resultPromise = WebAssembly.instantiateStreaming(fetchPromise, { './${rustName}': __exports });
+              resultPromise = fetch(wasm_path)
+                  .then(function(resp) {
+                      return WebAssembly.instantiateStreaming(resp, wasmImport)
+                  }, function() {
+                      return instantiateViaArrayBufferXHR()
+                  })
+                          
           } else {
-              resultPromise = fetchPromise
-              .then(response => response.arrayBuffer())
-              .then(buffer => WebAssembly.instantiate(buffer, { './${rustName}': __exports }));
+              resultPromise = instantiateViaArrayBuffer()
           }
           return resultPromise.then(({instance}) => {
               wasm = init.wasm = instance.exports;
